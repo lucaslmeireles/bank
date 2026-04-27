@@ -8,8 +8,8 @@ import { ConfigService } from '@nestjs/config';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         connection: {
-          host: config.get('REDIS_HOST', 'localhost'),
-          port: config.get('REDIS_PORT', 6379),
+          url: config.get('REDIS_URL', 'localhost'),
+          tls: {},
         },
       }),
     }),

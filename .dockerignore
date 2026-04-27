@@ -1,0 +1,7 @@
+node_modules/
+.git/
+*.log
+.env
+dist/
+acid-test.ts
+.env.test.local

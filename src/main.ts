@@ -9,6 +9,9 @@ async function bootstrap() {
   app.setGlobalPrefix('/v1/api', {
     exclude: ['health', 'docs'],
   });
+  app.enableCors({
+    origin: ['http://localhost:3000'],
+  });
   app.use(helmet());
   app.useGlobalFilters(new GlobalExceptionFilter());
   const openApiDoc = SwaggerModule.createDocument(

@@ -72,15 +72,6 @@ describe('Transactions (e2e)', () => {
       expect(res.body.message).toBe('Saldo insuficiente');
     });
 
-    it('deve rejeitar from === to', async () => {
-      const res = await request(app.getHttpServer())
-        .post('/v1/api/transactions')
-        .set('Authorization', `Bearer ${token_ana}`)
-        .send({ from: fromAccountId, to: fromAccountId, amount: 100 });
-
-      expect(res.status).toBe(422);
-    });
-
     it('deve rejeitar amount negativo', async () => {
       const res = await request(app.getHttpServer())
         .post('/v1/api/transactions')

@@ -8,6 +8,7 @@ import * as argon from 'argon2';
 import { JwtService } from '@nestjs/jwt';
 import { CreateUserDto } from '../users/dto/create-user.dto';
 import { User } from '../users/user.entity';
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -41,10 +42,13 @@ export class AuthService {
 
     return {
       access_token: await this.jwtService.signAsync(payload),
+      userId: user.id,
     };
   }
 
   async register(dto: CreateUserDto) {
     await this.usersService.create(dto);
   }
+
+  async keypad() {}
 }

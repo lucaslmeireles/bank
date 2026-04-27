@@ -1,98 +1,275 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# NovoBanco API
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+> A backend simulation of a real banking system — built to demonstrate ACID transactions, race conditions, message queues, and real-time communication using modern Node.js tooling.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+![NestJS](https://img.shields.io/badge/NestJS-E0234E?style=flat&logo=nestjs&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat&logo=postgresql&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-FF4438?style=flat&logo=redis&logoColor=white)
+![Next.js](https://img.shields.io/badge/Next.js-000000?style=flat&logo=nextdotjs&logoColor=white)
+![DrizzleORM](https://img.shields.io/badge/Drizzle_ORM-C5F74F?style=flat&logo=drizzle&logoColor=black)
 
-## Description
+---
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## What this project is about
 
-## Project setup
+Most junior portfolios are CRUDs with JWT auth. This one goes further.
 
-```bash
-$ yarn install
+NovoBanco simulates the core of a real banking system — the part that actually matters: what happens when two users transfer money **at the same time**. The project demonstrates that the developer understands not just how to build an API, but *why* certain architectural decisions exist.
+
+The interactive frontend visualizes every step in real time: the transaction starting, the database lock being acquired, the commit or rollback, and the final balance update via WebSocket.
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────┐
+│                 Next.js (UI)                │
+│  PhoneFrame ←→ BankContext ←→ Terminal      │
+│         ↕ HTTP          ↕ WebSocket         │
+└─────────────────────────────────────────────┘
+                     │
+┌─────────────────────────────────────────────┐
+│              NestJS (API)                   │
+│  AuthModule → JwtGuard → TransactionsModule │
+│                   ↓                         │
+│            BullMQ Worker                    │
+│    (processes queue in background)          │
+│                   ↓                         │
+│         WebSocket Gateway                   │
+│   (emits real-time logs to frontend)        │
+└─────────────────────────────────────────────┘
+         │                    │
+┌────────────────┐   ┌────────────────┐
+│  PostgreSQL    │   │     Redis      │
+│  (ACID, locks) │   │  (BullMQ queue)│
+└────────────────┘   └────────────────┘
 ```
 
-## Compile and run the project
+---
 
-```bash
-# development
-$ yarn run start
+## Core concepts demonstrated
 
-# watch mode
-$ yarn run start:dev
+### ACID Transactions
 
-# production mode
-$ yarn run start:prod
+Every transfer follows the full ACID contract:
+
+```sql
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+  INSERT INTO transactions (status) VALUES ('pending');
+  SELECT * FROM accounts WHERE id = $1 FOR UPDATE;  -- acquires row lock
+  -- validates balance
+  UPDATE accounts SET balance = balance - $amount WHERE id = $from;
+  UPDATE accounts SET balance = balance + $amount WHERE id = $to;
+  UPDATE transactions SET status = 'committed';
+COMMIT;
 ```
 
-## Run tests
+- **Atomicity** — debit and credit happen together or not at all. If credit fails, debit rolls back.
+- **Consistency** — balance can never go negative. Business rules are validated before commit.
+- **Isolation** — `SELECT FOR UPDATE` locks the rows. Two concurrent transactions on the same account wait, not corrupt.
+- **Durability** — after `COMMIT`, the data is on disk. Crashes or restarts don't undo the operation.
+
+### Race Conditions
+
+The `/transactions` endpoint accepts concurrent requests. With `ISOLATION LEVEL SERIALIZABLE` and `SELECT FOR UPDATE`, only one transaction can hold the lock on a given account at a time. The others wait, re-read the balance after the lock is released, and roll back if the balance is no longer sufficient.
+
+You can observe this live in the UI by enabling **Race ⚡ mode**.
+
+### Message Queue (BullMQ)
+
+In **Queue mode**, the API returns `202 Accepted` immediately. The actual ACID transaction is processed by a BullMQ worker in the background. The result is pushed to the frontend via WebSocket when the worker finishes.
+
+This mirrors how real payment systems work: PIX in Brazil settles in under a second, but the queue is still there.
+
+### Real-time Updates (WebSocket)
+
+The NestJS WebSocket Gateway emits two types of events:
+
+- `log:{userId}` — granular logs from inside the worker (BEGIN, SELECT FOR UPDATE, COMMIT/ROLLBACK)
+- `transaction:updated` — final status change with updated balance
+
+---
+
+## Tech stack
+
+| Layer | Technology | Why |
+|---|---|---|
+| API | NestJS + TypeScript | Structured, testable, decorator-based |
+| ORM | Drizzle ORM | Type-safe SQL, no magic |
+| Database | PostgreSQL | ACID-compliant, row-level locking |
+| Queue | BullMQ + Redis | Reliable job processing with retries |
+| Auth | JWT + Argon2 | Industry-standard password hashing |
+| Validation | Zod (nestjs-zod) | Runtime type safety on all inputs |
+| Frontend | Next.js + Tailwind CSS | Fast, component-based UI |
+| Real-time | Socket.io | WebSocket with fallback |
+| Testing | Jest + Supertest | Unit + E2E test coverage |
+| Health | @nestjs/terminus | Monitors DB, queue, memory, disk |
+
+---
+
+## Getting started
+
+### Prerequisites
+
+- Node.js 20+
+- Docker and Docker Compose
+
+### 1. Clone the repository
 
 ```bash
-# unit tests
-$ yarn run test
-
-# e2e tests
-$ yarn run test:e2e
-
-# test coverage
-$ yarn run test:cov
+git clone https://github.com/your-username/novobank
+cd novobank
 ```
 
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+### 2. Set up environment variables
 
 ```bash
-$ yarn install -g @nestjs/mau
-$ mau deploy
+cp .env.example .env
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+Edit `.env` with your values:
 
-## Resources
+```env
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/bank
+REDIS_HOST=localhost
+REDIS_PORT=6379
+JWT_SECRET=your-secret-here
+NEXT_PUBLIC_API_URL=http://localhost:3000/v1/api
+```
 
-Check out a few resources that may come in handy when working with NestJS:
+### 3. Start the infrastructure
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+```bash
+docker compose up -d
+```
 
-## Support
+This starts PostgreSQL and Redis.
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+### 4. Run migrations
 
-## Stay in touch
+```bash
+cd api
+npx drizzle-kit migrate
+```
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+### 5. Start the API
+
+```bash
+cd api
+npm install
+npm run start:dev
+```
+
+### 6. Start the frontend
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Open [http://localhost:3001](http://localhost:3001) and you're good to go.
+
+---
+
+## Running tests
+
+```bash
+# Unit tests
+npm run test
+
+# Unit tests with coverage
+npm run test:cov
+
+# E2E tests (requires running infrastructure)
+npm run test:e2e
+```
+
+---
+
+## API Endpoints
+
+All routes require `Authorization: Bearer <token>` except auth routes.
+
+### Auth
+
+| Method | Route | Description |
+|---|---|---|
+| `POST` | `/v1/api/auth/login` | Login with email and password |
+| `POST` | `/v1/api/users` | Register a new user |
+
+### Accounts
+
+| Method | Route | Description |
+|---|---|---|
+| `POST` | `/v1/api/accounts` | Create a bank account |
+| `GET` | `/v1/api/accounts` | List all accounts |
+| `GET` | `/v1/api/accounts/:id` | Get account by ID |
+
+### Transactions
+
+| Method | Route | Description |
+|---|---|---|
+| `POST` | `/v1/api/transactions` | Create a transaction (ACID) |
+| `GET` | `/v1/api/transactions` | List all transactions |
+| `GET` | `/v1/api/transactions/:id` | Get transaction by ID |
+
+### Health
+
+| Method | Route | Description |
+|---|---|---|
+| `GET` | `/health` | Returns status of DB, queue, memory, disk |
+
+---
+
+## Project structure
+
+```
+novobank/
+├── api/                          # NestJS backend
+│   ├── src/
+│   │   ├── auth/                 # JWT auth, guards, strategies
+│   │   ├── users/                # User management
+│   │   ├── accounts/             # Bank accounts
+│   │   ├── transactions/         # ACID transactions + BullMQ worker
+│   │   │   ├── transactions.service.ts
+│   │   │   ├── transactions.processor.ts   # BullMQ worker
+│   │   │   └── dto/
+│   │   ├── gateway/              # WebSocket gateway
+│   │   ├── drizzle/              # Schema + migrations
+│   │   ├── health/               # Health check indicators
+│   │   └── filters/              # Global exception filter
+│   └── test/                     # E2E tests
+│
+└── web/                          # Next.js frontend
+    ├── app/
+    │   └── page.tsx              # Main demo page
+    ├── components/
+    │   ├── PhoneFrame.tsx        # Mobile UI simulation
+    │   └── Terminal.tsx          # Real-time API log viewer
+    └── context/
+        └── BankContext.tsx       # Shared state + API calls
+```
+
+---
+
+## Design decisions worth mentioning
+
+**Why `ISOLATION LEVEL SERIALIZABLE` instead of just `FOR UPDATE`?**
+`FOR UPDATE` prevents dirty reads on the locked rows, but `SERIALIZABLE` also detects phantom reads and write skew across the entire transaction. For financial operations, this is the correct isolation level.
+
+**Why BullMQ instead of handling everything synchronously?**
+In a real bank, not all operations are instant. PIX settles fast, but TED/DOC are batch-processed at specific windows. BullMQ demonstrates the architectural pattern — the API acknowledges the request immediately (`202 Accepted`) and the actual processing happens asynchronously with retries built in.
+
+**Why Drizzle instead of Prisma?**
+Drizzle writes SQL that looks like SQL. `db.select().from(accounts).where(eq(...)).for('update')` maps directly to `SELECT ... FOR UPDATE`. There's no hidden query generation — which matters when the correctness of your SQL is the whole point of the project.
+
+**Why Zod instead of class-validator?**
+Zod validates at runtime with full TypeScript inference. The schema is the source of truth for both validation and types — no decorators, no duplication.
+
+---
 
 ## License
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+MIT

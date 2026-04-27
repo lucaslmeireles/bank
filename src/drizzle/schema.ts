@@ -27,7 +27,8 @@ export const accounts = pgTable('accounts', {
     .notNull()
     .references(() => users.id, {
       onDelete: 'cascade',
-    }),
+    })
+    .unique(),
   created_at: timestamp('created_at').notNull().defaultNow(),
 });
 

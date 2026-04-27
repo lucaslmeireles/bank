@@ -11,7 +11,8 @@ import {
 import { TransactionsService } from './transactions.service';
 import { CreateTransactionDto } from './dto/create-transaction.dto';
 import { ApiBearerAuth } from '@nestjs/swagger';
-
+import { User } from 'src/auth/decorators/user.decorator';
+import type { User as UserType } from 'src/users/user.entity';
 @ApiBearerAuth()
 @Controller('transactions')
 export class TransactionsController {
@@ -19,14 +20,20 @@ export class TransactionsController {
 
   @HttpCode(201)
   @Post()
-  create(@Body() createTransactionDto: CreateTransactionDto) {
-    return this.transactionsService.create(createTransactionDto);
+  create(
+    @Body() createTransactionDto: CreateTransactionDto,
+    @User() user: UserType,
+  ) {
+    return this.transactionsService.create(createTransactionDto, user);
   }
 
   @HttpCode(202)
   @Post('/queue')
-  createWithQueue(@Body() createTransactionDto: CreateTransactionDto) {
-    return this.transactionsService.createWithQueue(createTransactionDto);
+  createWithQueue(
+    @Body() createTransactionDto: CreateTransactionDto,
+    @User() user: UserType,
+  ) {
+    return this.transactionsService.createWithQueue(createTransactionDto, user);
   }
   @HttpCode(200)
   @Get()

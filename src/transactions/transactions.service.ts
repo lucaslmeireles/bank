@@ -6,24 +6,33 @@ import { eq, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import { User } from 'src/users/user.entity';
 @Injectable()
 export class TransactionsService {
   constructor(
     private readonly drizzle: DrizzleService,
     @InjectQueue('transactions') private readonly queue: Queue,
   ) {}
-  async create(dto: CreateTransactionDto) {
+  async create(dto: CreateTransactionDto, user: User) {
+    const [accountFrom] = await this.drizzle.db
+      .select()
+      .from(schema.accounts)
+      .where(eq(schema.accounts.owner, user.id));
+
     const newTransaction = await this.drizzle.db.transaction(
       async (tx) => {
         const [transaction] = await tx
           .insert(schema.transactions)
-          .values(dto)
+          .values({
+            ...dto,
+            from: accountFrom.id,
+          })
           .returning();
 
         const [from] = await tx
           .select({ balance: schema.accounts.balance })
           .from(schema.accounts)
-          .where(eq(schema.accounts.id, dto.from))
+          .where(eq(schema.accounts.owner, user.id))
           .for('update');
 
         const [to] = await tx
@@ -41,7 +50,7 @@ export class TransactionsService {
         await tx
           .update(schema.accounts)
           .set({ balance: sql`${schema.accounts.balance} - ${dto.amount}` })
-          .where(eq(schema.accounts.id, dto.from));
+          .where(eq(schema.accounts.id, user.id));
         await tx
           .update(schema.accounts)
           .set({ balance: sql`${schema.accounts.balance} + ${dto.amount}` })
@@ -66,10 +75,14 @@ export class TransactionsService {
    * Create with bullmq, for many transactions
    * @param dto
    */
-  async createWithQueue(dto: CreateTransactionDto) {
+  async createWithQueue(dto: CreateTransactionDto, user: User) {
+    const [accountFrom] = await this.drizzle.db
+      .select()
+      .from(schema.accounts)
+      .where(eq(schema.accounts.owner, user.id));
     const [transaction] = await this.drizzle.db
       .insert(schema.transactions)
-      .values({ ...dto, status: 'pending' })
+      .values({ ...dto, status: 'pending', from: accountFrom.id })
       .returning();
 
     await this.queue.add(

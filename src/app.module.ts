@@ -30,6 +30,7 @@ import { JwtStrategy } from './auth/strategies/jwt.strategy';
 import { TransactionsModule } from './transactions/transactions.module';
 import { QueueModule } from './transactions/queue.module';
 import { HealthModule } from './health/health.module';
+
 @Catch(HttpException)
 class HttpExceptionFilter extends BaseExceptionFilter {
   private logger = new Logger(HttpExceptionFilter.name);
