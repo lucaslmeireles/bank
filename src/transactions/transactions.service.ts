@@ -30,31 +30,46 @@ export class TransactionsService {
           .returning();
 
         const [from] = await tx
-          .select({ balance: schema.accounts.balance })
+          .select({ balance: schema.accounts.balance, id: schema.accounts.id })
           .from(schema.accounts)
           .where(eq(schema.accounts.owner, user.id))
           .for('update');
 
         const [to] = await tx
-          .select({ balance: schema.accounts.balance })
+          .select({ balance: schema.accounts.balance, id: schema.accounts.id })
           .from(schema.accounts)
           .where(eq(schema.accounts.id, dto.to))
           .for('update');
 
         if (!from || !to) throw new Error('Conta não encontrada');
 
-        if (Number(from.balance) < Number(dto.amount)) {
+        if (BigInt(from.balance) < BigInt(dto.amount)) {
           throw new Error('Saldo insuficiente');
         }
 
-        await tx
+        const debit = await tx
           .update(schema.accounts)
-          .set({ balance: sql`${schema.accounts.balance} - ${dto.amount}` })
-          .where(eq(schema.accounts.id, user.id));
-        await tx
+          .set({
+            balance: sql`${schema.accounts.balance} - ${dto.amount}`,
+          })
+          .where(eq(schema.accounts.id, from.id))
+          .returning();
+
+        if (debit.length === 0) {
+          throw new Error('Erro ao debitar');
+        }
+
+        const credit = await tx
           .update(schema.accounts)
-          .set({ balance: sql`${schema.accounts.balance} + ${dto.amount}` })
-          .where(eq(schema.accounts.id, dto.to));
+          .set({
+            balance: sql`${schema.accounts.balance} + ${dto.amount}`,
+          })
+          .where(eq(schema.accounts.id, to.id))
+          .returning();
+
+        if (credit.length === 0) {
+          throw new Error('Erro ao creditar');
+        }
         const [commited] = await tx
           .update(schema.transactions)
           .set({ status: schema.transactionStatusEnum.enumValues[1] })
