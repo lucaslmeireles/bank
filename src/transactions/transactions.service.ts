@@ -43,7 +43,7 @@ export class TransactionsService {
 
         if (!from || !to) throw new Error('Conta não encontrada');
 
-        if (BigInt(from.balance) < BigInt(dto.amount)) {
+        if (Number(from.balance) < Number(dto.amount)) {
           throw new Error('Saldo insuficiente');
         }
 

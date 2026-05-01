@@ -6,11 +6,21 @@ import helmet from 'helmet';
 import { GlobalExceptionFilter } from './filters/excpetion.filter';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  const origins = process.env.CORS_ORIGINS?.split(',') ?? [];
   app.setGlobalPrefix('/v1/api', {
     exclude: ['health', 'docs'],
   });
   app.enableCors({
-    origin: ['http://localhost:3000'],
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+
+      if (origins.includes(origin) || origin.endsWith('.vercel.app')) {
+        return callback(null, true);
+      }
+
+      return callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
   });
   app.use(helmet());
   app.useGlobalFilters(new GlobalExceptionFilter());

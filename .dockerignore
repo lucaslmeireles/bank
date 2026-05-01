@@ -5,3 +5,6 @@ node_modules/
 dist/
 acid-test.ts
 .env.test.local
+covarege/
+dist/
+.github/
