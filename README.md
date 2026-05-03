@@ -1,275 +1,299 @@
 # NovoBanco API
 
-> A backend simulation of a real banking system — built to demonstrate ACID transactions, race conditions, message queues, and real-time communication using modern Node.js tooling.
+> Simulação do núcleo de um sistema bancário real — transações ACID, race conditions, filas assíncronas e comunicação em tempo real via WebSocket.
 
 ![NestJS](https://img.shields.io/badge/NestJS-E0234E?style=flat&logo=nestjs&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat&logo=postgresql&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-FF4438?style=flat&logo=redis&logoColor=white)
-![Next.js](https://img.shields.io/badge/Next.js-000000?style=flat&logo=nextdotjs&logoColor=white)
 ![DrizzleORM](https://img.shields.io/badge/Drizzle_ORM-C5F74F?style=flat&logo=drizzle&logoColor=black)
+![Jest](https://img.shields.io/badge/Jest-C21325?style=flat&logo=jest&logoColor=white)
 
 ---
 
-## What this project is about
+## 🌐 Demo ao vivo
 
-Most junior portfolios are CRUDs with JWT auth. This one goes further.
+**Frontend:** [https://bank-frontend-snowy.vercel.app](https://bank-frontend-snowy.vercel.app)
 
-NovoBanco simulates the core of a real banking system — the part that actually matters: what happens when two users transfer money **at the same time**. The project demonstrates that the developer understands not just how to build an API, but *why* certain architectural decisions exist.
+Use as credenciais abaixo para explorar o sistema:
 
-The interactive frontend visualizes every step in real time: the transaction starting, the database lock being acquired, the commit or rollback, and the final balance update via WebSocket.
+| Email | Senha | Conta | Saldo inicial |
+|---|---|---|---|
+| alice@demo.com | demo123 | 1001 | R$ 5.000,00 |
+| bob@demo.com | demo123 | 1002 | R$ 3.000,00 |
+| carol@demo.com | demo123 | 1003 | R$ 7.500,00 |
+
+> Faça login com Alice e transfira para Bob ou Carol. Ative o modo **Race ⚡** para disparar 3 transferências simultâneas e observar o isolamento de transações em ação.
 
 ---
 
-## Architecture
+## Sobre o projeto
+
+A maioria dos portfólios junior é um CRUD com JWT. Este vai além.
+
+O NovoBanco simula a parte de um sistema bancário que realmente importa: o que acontece quando dois usuários transferem dinheiro **ao mesmo tempo**. O projeto demonstra que o desenvolvedor entende não apenas como construir uma API, mas *por que* certas decisões arquiteturais existem — e quais as consequências de não tomá-las.
+
+O frontend interativo visualiza cada etapa em tempo real: a transação iniciando, o lock sendo adquirido no banco de dados, o commit ou rollback, e o saldo sendo atualizado via WebSocket.
+
+---
+
+## Arquitetura
 
 ```
-┌─────────────────────────────────────────────┐
-│                 Next.js (UI)                │
-│  PhoneFrame ←→ BankContext ←→ Terminal      │
-│         ↕ HTTP          ↕ WebSocket         │
-└─────────────────────────────────────────────┘
-                     │
-┌─────────────────────────────────────────────┐
-│              NestJS (API)                   │
-│  AuthModule → JwtGuard → TransactionsModule │
-│                   ↓                         │
-│            BullMQ Worker                    │
-│    (processes queue in background)          │
-│                   ↓                         │
-│         WebSocket Gateway                   │
-│   (emits real-time logs to frontend)        │
-└─────────────────────────────────────────────┘
-         │                    │
-┌────────────────┐   ┌────────────────┐
-│  PostgreSQL    │   │     Redis      │
-│  (ACID, locks) │   │  (BullMQ queue)│
-└────────────────┘   └────────────────┘
+┌──────────────────────────────────────────────────┐
+│         Next.js — bank-frontend-snowy.vercel.app │
+│     PhoneFrame ←→ BankContext ←→ Terminal        │
+│            ↕ HTTP           ↕ WebSocket          │
+└──────────────────────────────────────────────────┘
+                       │
+┌──────────────────────────────────────────────────┐
+│              NestJS API (Cloud Run)              │
+│   AuthModule → JwtGuard → TransactionsModule     │
+│                    ↓                             │
+│             BullMQ Worker                        │
+│     (processa transações em background)          │
+│                    ↓                             │
+│          WebSocket Gateway                       │
+│    (emite logs e status em tempo real)           │
+└──────────────────────────────────────────────────┘
+          │                       │
+┌──────────────────┐   ┌──────────────────┐
+│   PostgreSQL     │   │      Redis       │
+│   Supabase       │   │     Upstash      │
+│  (ACID, locks)   │   │  (fila BullMQ)   │
+└──────────────────┘   └──────────────────┘
 ```
 
 ---
 
-## Core concepts demonstrated
+## Conceitos demonstrados
 
-### ACID Transactions
+### Transações ACID
 
-Every transfer follows the full ACID contract:
+Cada transferência segue o contrato ACID completo:
 
 ```sql
 BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
   INSERT INTO transactions (status) VALUES ('pending');
-  SELECT * FROM accounts WHERE id = $1 FOR UPDATE;  -- acquires row lock
-  -- validates balance
+  SELECT * FROM accounts WHERE id = $1 FOR UPDATE; -- trava a linha
+  -- valida saldo
   UPDATE accounts SET balance = balance - $amount WHERE id = $from;
   UPDATE accounts SET balance = balance + $amount WHERE id = $to;
   UPDATE transactions SET status = 'committed';
 COMMIT;
+-- em qualquer erro: ROLLBACK + status = 'rolled_back'
 ```
 
-- **Atomicity** — debit and credit happen together or not at all. If credit fails, debit rolls back.
-- **Consistency** — balance can never go negative. Business rules are validated before commit.
-- **Isolation** — `SELECT FOR UPDATE` locks the rows. Two concurrent transactions on the same account wait, not corrupt.
-- **Durability** — after `COMMIT`, the data is on disk. Crashes or restarts don't undo the operation.
+| Propriedade | Implementação |
+|---|---|
+| **Atomicidade** | Débito e crédito em uma única transação. Erro em qualquer etapa reverte tudo. |
+| **Consistência** | Saldo validado antes do commit. Nunca fica negativo. |
+| **Isolamento** | `SELECT FOR UPDATE` + `SERIALIZABLE`. Transações concorrentes esperam, não corrompem. |
+| **Durabilidade** | Após `COMMIT`, o dado está persistido. Crashes não desfazem a operação. |
 
 ### Race Conditions
 
-The `/transactions` endpoint accepts concurrent requests. With `ISOLATION LEVEL SERIALIZABLE` and `SELECT FOR UPDATE`, only one transaction can hold the lock on a given account at a time. The others wait, re-read the balance after the lock is released, and roll back if the balance is no longer sufficient.
+O endpoint `POST /transactions` aceita requisições concorrentes. Com `ISOLATION LEVEL SERIALIZABLE` e `SELECT FOR UPDATE`, apenas uma transação pode segurar o lock de uma conta por vez. As demais aguardam, releem o saldo e fazem rollback se necessário.
 
-You can observe this live in the UI by enabling **Race ⚡ mode**.
+Visível na prática ativando o modo **Race ⚡** no frontend — 3 transferências simultâneas via `Promise.all`, onde apenas as que cabem no saldo são commitadas.
 
-### Message Queue (BullMQ)
+### Fila Assíncrona (BullMQ)
 
-In **Queue mode**, the API returns `202 Accepted` immediately. The actual ACID transaction is processed by a BullMQ worker in the background. The result is pushed to the frontend via WebSocket when the worker finishes.
+No modo **Queue**, a API retorna `202 Accepted` imediatamente. O worker processa a transação em background com retries automáticos em caso de falha. O resultado é enviado via WebSocket quando concluído — o mesmo padrão usado por sistemas de pagamento reais.
 
-This mirrors how real payment systems work: PIX in Brazil settles in under a second, but the queue is still there.
+### WebSocket em Tempo Real
 
-### Real-time Updates (WebSocket)
+O Gateway do NestJS emite dois eventos:
 
-The NestJS WebSocket Gateway emits two types of events:
+- `log:{userId}` — logs granulares do worker em cada etapa (BEGIN, SELECT FOR UPDATE, COMMIT/ROLLBACK)
+- `transaction:updated` — status final com saldo atualizado
 
-- `log:{userId}` — granular logs from inside the worker (BEGIN, SELECT FOR UPDATE, COMMIT/ROLLBACK)
-- `transaction:updated` — final status change with updated balance
+O terminal no frontend exibe esses eventos em tempo real, simulando o que seria o log do servidor.
 
----
+### Exception Filter Global
 
-## Tech stack
+Todos os erros do Postgres são mapeados para respostas HTTP semânticas:
 
-| Layer | Technology | Why |
+| Código Postgres | HTTP | Situação |
 |---|---|---|
-| API | NestJS + TypeScript | Structured, testable, decorator-based |
-| ORM | Drizzle ORM | Type-safe SQL, no magic |
-| Database | PostgreSQL | ACID-compliant, row-level locking |
-| Queue | BullMQ + Redis | Reliable job processing with retries |
-| Auth | JWT + Argon2 | Industry-standard password hashing |
-| Validation | Zod (nestjs-zod) | Runtime type safety on all inputs |
-| Frontend | Next.js + Tailwind CSS | Fast, component-based UI |
-| Real-time | Socket.io | WebSocket with fallback |
-| Testing | Jest + Supertest | Unit + E2E test coverage |
-| Health | @nestjs/terminus | Monitors DB, queue, memory, disk |
+| `40001` | `409 Conflict` | Conflito de serialização (race condition) |
+| `40P01` | `409 Conflict` | Deadlock detectado |
+| `23505` | `409 Conflict` | Unique constraint (email/número duplicado) |
+| `23503` | `422 Unprocessable` | Foreign key inválida |
 
 ---
 
-## Getting started
+## Stack
 
-### Prerequisites
+| Camada | Tecnologia | Por quê |
+|---|---|---|
+| API | NestJS + TypeScript | Estruturado, testável, orientado a módulos |
+| ORM | Drizzle ORM | SQL explícito e type-safe, sem abstração desnecessária |
+| Banco | PostgreSQL (Supabase) | ACID nativo, lock por linha com `FOR UPDATE` |
+| Fila | BullMQ + Redis (Upstash) | Jobs confiáveis com retries e backoff exponencial |
+| Auth | Passport + JWT + Argon2 | Padrão da indústria para autenticação e hash |
+| Validação | Zod + nestjs-zod | Runtime type safety, schema como fonte única da verdade |
+| Tempo real | Socket.io | WebSocket com fallback automático |
+| Testes | Jest + Supertest | Unitários e E2E com banco real |
+| Health | @nestjs/terminus | Monitora DB, fila, memória e disco |
+| Deploy | Google Cloud Run + Docker | Containerizado, escala para zero |
+
+---
+
+## Rodando localmente
+
+### Pré-requisitos
 
 - Node.js 20+
-- Docker and Docker Compose
+- Docker e Docker Compose
 
-### 1. Clone the repository
+### 1. Clone o repositório
 
 ```bash
-git clone https://github.com/your-username/novobank
-cd novobank
+git clone https://github.com/seu-usuario/novobank-api
+cd novobank-api
 ```
 
-### 2. Set up environment variables
+### 2. Configure as variáveis de ambiente
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` with your values:
-
 ```env
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/bank
 REDIS_HOST=localhost
 REDIS_PORT=6379
-JWT_SECRET=your-secret-here
-NEXT_PUBLIC_API_URL=http://localhost:3000/v1/api
+JWT_SECRET=sua-chave-secreta
+NODE_ENV=development
 ```
 
-### 3. Start the infrastructure
+### 3. Suba a infraestrutura
 
 ```bash
 docker compose up -d
 ```
 
-This starts PostgreSQL and Redis.
-
-### 4. Run migrations
+### 4. Migrations e seed
 
 ```bash
-cd api
 npx drizzle-kit migrate
+npm run seed
 ```
 
-### 5. Start the API
+### 5. Inicie a API
 
 ```bash
-cd api
 npm install
 npm run start:dev
 ```
 
-### 6. Start the frontend
-
-```bash
-cd web
-npm install
-npm run dev
-```
-
-Open [http://localhost:3001](http://localhost:3001) and you're good to go.
+API disponível em `http://localhost:3000/v1/api`.
+Documentação Swagger em `http://localhost:3000/docs`.
 
 ---
 
-## Running tests
+## Testes
 
 ```bash
-# Unit tests
+# unitários
 npm run test
 
-# Unit tests with coverage
+# unitários com cobertura
 npm run test:cov
 
-# E2E tests (requires running infrastructure)
+# E2E (requer infraestrutura rodando)
 npm run test:e2e
 ```
 
+Os testes E2E sobem um banco de teste isolado, rodam as migrations automaticamente e truncam as tabelas ao final.
+
 ---
 
-## API Endpoints
+## Endpoints
 
-All routes require `Authorization: Bearer <token>` except auth routes.
+Todas as rotas exigem `Authorization: Bearer <token>` exceto as de auth.
 
 ### Auth
 
-| Method | Route | Description |
+| Método | Rota | Descrição |
 |---|---|---|
-| `POST` | `/v1/api/auth/login` | Login with email and password |
-| `POST` | `/v1/api/users` | Register a new user |
+| `POST` | `/v1/api/auth/login` | Login com email e senha |
 
-### Accounts
+### Usuários
 
-| Method | Route | Description |
+| Método | Rota | Descrição |
 |---|---|---|
-| `POST` | `/v1/api/accounts` | Create a bank account |
-| `GET` | `/v1/api/accounts` | List all accounts |
-| `GET` | `/v1/api/accounts/:id` | Get account by ID |
+| `POST` | `/v1/api/users` | Criar usuário |
+| `GET` | `/v1/api/users/:id` | Buscar usuário por ID |
 
-### Transactions
+### Contas
 
-| Method | Route | Description |
+| Método | Rota | Descrição |
 |---|---|---|
-| `POST` | `/v1/api/transactions` | Create a transaction (ACID) |
-| `GET` | `/v1/api/transactions` | List all transactions |
-| `GET` | `/v1/api/transactions/:id` | Get transaction by ID |
+| `POST` | `/v1/api/accounts` | Criar conta bancária |
+| `GET` | `/v1/api/accounts` | Listar contas |
+| `GET` | `/v1/api/accounts/:id` | Buscar conta por ID |
+
+### Transações
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `POST` | `/v1/api/transactions` | Criar transação ACID |
+| `GET` | `/v1/api/transactions` | Listar transações |
+| `GET` | `/v1/api/transactions/:id` | Buscar transação por ID |
 
 ### Health
 
-| Method | Route | Description |
+| Método | Rota | Descrição |
 |---|---|---|
-| `GET` | `/health` | Returns status of DB, queue, memory, disk |
+| `GET` | `/health` | Status de DB, fila, memória e disco |
 
 ---
 
-## Project structure
+## Estrutura do projeto
 
 ```
-novobank/
-├── api/                          # NestJS backend
-│   ├── src/
-│   │   ├── auth/                 # JWT auth, guards, strategies
-│   │   ├── users/                # User management
-│   │   ├── accounts/             # Bank accounts
-│   │   ├── transactions/         # ACID transactions + BullMQ worker
-│   │   │   ├── transactions.service.ts
-│   │   │   ├── transactions.processor.ts   # BullMQ worker
-│   │   │   └── dto/
-│   │   ├── gateway/              # WebSocket gateway
-│   │   ├── drizzle/              # Schema + migrations
-│   │   ├── health/               # Health check indicators
-│   │   └── filters/              # Global exception filter
-│   └── test/                     # E2E tests
-│
-└── web/                          # Next.js frontend
-    ├── app/
-    │   └── page.tsx              # Main demo page
-    ├── components/
-    │   ├── PhoneFrame.tsx        # Mobile UI simulation
-    │   └── Terminal.tsx          # Real-time API log viewer
-    └── context/
-        └── BankContext.tsx       # Shared state + API calls
+src/
+├── auth/                   # Autenticação JWT + Passport
+├── users/                  # Módulo de usuários
+├── accounts/               # Módulo de contas bancárias
+├── transactions/
+│   ├── transactions.service.ts      # Lógica ACID síncrona
+│   ├── transactions.processor.ts    # Worker BullMQ
+│   ├── transactions.controller.ts
+│   └── dto/
+├── gateway/                # WebSocket gateway
+├── drizzle/                # Schema, migrations, seed
+├── health/                 # Health indicators
+├── redis/                  # Cliente Redis compartilhado
+└── filters/                # Exception filter global (códigos Postgres)
+
+test/
+├── transactions.e2e-spec.ts
+└── helpers/
+    ├── auth.ts             # createAndLoginUser, createAccount
+    ├── database.ts         # resetDatabase
+    └── wait.ts             # waitForTransaction (polling WebSocket)
 ```
 
 ---
 
-## Design decisions worth mentioning
+## Decisões de design
 
-**Why `ISOLATION LEVEL SERIALIZABLE` instead of just `FOR UPDATE`?**
-`FOR UPDATE` prevents dirty reads on the locked rows, but `SERIALIZABLE` also detects phantom reads and write skew across the entire transaction. For financial operations, this is the correct isolation level.
+**Por que `SERIALIZABLE` em vez de só `READ COMMITTED` com `FOR UPDATE`?**
+O `FOR UPDATE` previne leituras sujas nas linhas travadas, mas o `SERIALIZABLE` detecta também phantom reads e write skew em toda a transação. Para operações financeiras, é o nível correto.
 
-**Why BullMQ instead of handling everything synchronously?**
-In a real bank, not all operations are instant. PIX settles fast, but TED/DOC are batch-processed at specific windows. BullMQ demonstrates the architectural pattern — the API acknowledges the request immediately (`202 Accepted`) and the actual processing happens asynchronously with retries built in.
+**Por que Drizzle em vez de Prisma?**
+O Drizzle escreve SQL que parece SQL — `db.select().from(accounts).where(eq(...)).for('update')` mapeia diretamente para `SELECT ... FOR UPDATE`. Não há geração oculta de queries, o que importa quando a correção do SQL é o ponto central do projeto.
 
-**Why Drizzle instead of Prisma?**
-Drizzle writes SQL that looks like SQL. `db.select().from(accounts).where(eq(...)).for('update')` maps directly to `SELECT ... FOR UPDATE`. There's no hidden query generation — which matters when the correctness of your SQL is the whole point of the project.
+**Por que Zod em vez de class-validator?**
+O schema Zod é a fonte única da verdade para validação e tipos. Sem decorators, sem duplicação — o tipo TypeScript é inferido automaticamente do schema de validação.
 
-**Why Zod instead of class-validator?**
-Zod validates at runtime with full TypeScript inference. The schema is the source of truth for both validation and types — no decorators, no duplication.
+**Por que o exception filter mapeia códigos do Postgres?**
+Expor `duplicate key value violates unique constraint` para o cliente não é aceitável em produção. O filter centraliza o mapeamento de todos os erros conhecidos do Postgres para respostas HTTP semânticas, sem vazar detalhes internos.
 
 ---
 
-## License
+## Licença
 
 MIT
