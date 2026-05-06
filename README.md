@@ -28,10 +28,8 @@ Use as credenciais abaixo para explorar o sistema:
 
 ## Sobre o projeto
 
-A maioria dos portfólios junior é um CRUD com JWT. Este vai além.
 
-O NovoBanco simula a parte de um sistema bancário que realmente importa: o que acontece quando dois usuários transferem dinheiro **ao mesmo tempo**. O projeto demonstra que o desenvolvedor entende não apenas como construir uma API, mas *por que* certas decisões arquiteturais existem — e quais as consequências de não tomá-las.
-
+O NovoBanco simula a parte de um sistema bancário o que acontece quando dois usuários transferem dinheiro **ao mesmo tempo**.
 O frontend interativo visualiza cada etapa em tempo real: a transação iniciando, o lock sendo adquirido no banco de dados, o commit ou rollback, e o saldo sendo atualizado via WebSocket.
 
 ---
